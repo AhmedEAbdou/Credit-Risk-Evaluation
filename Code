@@ -1,0 +1,352 @@
+---
+title: "project2"
+author: "Ahmed Abdou"
+date: "2023-03-16"
+output: html_document
+---
+
+---
+title: "Project 2"
+author: "Ahmed Abdou"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Description of the project
+
+This project is based on credit risk evaluation, which is a crucial step in lending money. The case study uses the German Credit dataset, consisting of 1000 records with 30 variables each. The data deals with an early stage of the historical transition to predictive modeling, in which humans were employed to label records as either good or poor credit. The goal is to classify an applicant as a good or bad credit risk based on the predictor values. The cost of misclassification is summarized in an opportunity cost table derived from the average net profit per loan. The project involves developing classification models using data mining techniques such as logistic regression, classification trees, and neural networks. The performance of each model is evaluated based on the confusion matrix and cost/gain matrix for the validation data. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rpart)
+library(gains)
+library(caret)
+library("cowplot")
+
+## Plot lift charts
+plot.lift = function(pred.prob, actual, groups = 10){
+    #library(gains)
+    gain <- gains(actual = actual, 
+                  predicted = pred.prob, 
+                  groups=groups
+    )
+    
+    par(mfrow=c(1,2))
+    # plot lift chart
+    plot(c(0,gain$cume.pct.of.total*sum(actual))~c(0,gain$cume.obs), 
+         xlab="# Observations", 
+         ylab="The Number of 1's", col = "blue",
+         #main="The Cumulative Lift Chart", 
+         #sub = paste0("(% of 1's", " is ", round(mean(actual)*100,2), "%)"),
+         type="l",
+         #asp = 1,
+         xlim = c(0, length(actual)),
+         ylim = c(0, sum(actual)*1.0),
+         main = "The Cumulative Lift Chart"
+    )
+    #mtext(text = "The Cumulative Lift Chart", side=3, line=2, cex=1)
+    mtext(text = paste0("(% of 1's in actual response", " is ", round(mean(actual)*100,2), "%)"),
+          side=3, line=0.5, cex=1)
+    lines(c(0,sum(actual))~c(0, length(actual)), lty=2)
+    
+    # compute deciles and plot decile-wise chart
+    heights <- gain$mean.resp/mean(actual)
+    
+    par(mgp=c(3, 1.5, 0)) # Adjust tick mark position
+    midpoints <- barplot(heights,
+                       names.arg = gain$depth,
+                       ylim = c(0, max(gain$lift/100))*1.1,
+                       xlab = "Percentile", ylab = "Lift", main = "Decile-wise Lift Chart")
+    
+    # add labels to columns
+    text(midpoints, heights, labels=round(heights, 1), cex = 0.9, pos = 3, col = "blue")
+    par(mfrow=c(1,1))
+    
+    D = data.frame(Oberserved = actual, Propensity = pred.prob)
+    pp = D$Propensity
+    D = D[order(-pp), ]
+    invisible(list(sorted.data = D , gain=gain))
+}
+
+```
+
+# Part 1:
+First reading the data:
+```{r}
+credit <- read_csv("GermanCredit.csv")
+credit$RESPONSE <- credit$RESPONSE %>% as.factor()
+
+```
+
+Exploratory Data Analysis:
+
+```{r}
+table(credit$RESPONSE)
+```
+
+Analyzing the quantitative variables
+```{r}
+my_data <- credit %>%
+  select(RESPONSE, DURATION, AMOUNT, AGE)
+
+
+my_data_long <- my_data %>% 
+  tidyr::gather(key = "variable", value = "value", -RESPONSE)
+
+ggplot(data = my_data_long, aes(x = RESPONSE, y = value)) +
+  geom_boxplot() +
+  facet_wrap(~ variable, scales = "free_y") +
+  labs(title = "Response With DURATION, AMOUNT, and AGE")
+```
+
+Analyzing and comparing the Purpose of credit variables.
+
+```{r}
+
+credit <- credit %>% 
+  mutate_at(vars(NEW_CAR:RETRAINING), ~as.factor(.))
+
+purp_NEW_CAR <- ggplot(data=credit,aes(x=RESPONSE,fill=NEW_CAR)) + geom_bar() + labs(title = "New Cars") 
+
+purp_USED_CAR <- ggplot(data=credit,aes(x=RESPONSE,fill=USED_CAR)) + geom_bar() + labs(title="Used Cars") 
+
+purp_FURNITURE <- ggplot(data=credit,aes(x=RESPONSE,fill=FURNITURE)) + geom_bar() + labs(title="FURNITURE") 
+
+purp_RADIO_TV <- ggplot(data=credit,aes(x=RESPONSE,fill=`RADIO/TV`)) + geom_bar() + labs(title="RADIO/TV") 
+
+purp_EDUCATION <- ggplot(data=credit,aes(x=RESPONSE,fill=EDUCATION)) + geom_bar() + labs(title="EDUCATION") 
+
+purp_RETRAINING <- ggplot(data=credit,aes(x=RESPONSE,fill=RETRAINING)) + geom_bar() + labs(title="RETRAINING") 
+
+plot_grid(purp_NEW_CAR,purp_USED_CAR,purp_FURNITURE,purp_RADIO_TV,purp_EDUCATION,purp_RETRAINING)
+```
+
+
+Analyzing and comparing the different male status variables:
+
+```{r}
+MALE_DIV <- ggplot(credit,aes(x=as.factor(MALE_DIV),fill=RESPONSE)) + geom_bar(position = "dodge")
+
+MALE_SINGLE <- ggplot(credit,aes(x=as.factor(MALE_SINGLE),fill=RESPONSE)) + geom_bar(position = "dodge")
+
+MALE_MAR_or_WID <- ggplot(credit,aes(x=as.factor(MALE_MAR_or_WID),fill=RESPONSE)) + geom_bar(position = "dodge")
+
+plot_grid(MALE_DIV,MALE_SINGLE,MALE_MAR_or_WID,ncol=3)
+
+```
+
+Analyzing the remaining categorical variables:
+
+```{r}
+g_CHK_ACCT <- ggplot(credit,aes(x=CHK_ACCT,fill=RESPONSE)) +geom_bar(position = "dodge")
+
+g_HISTORY <- ggplot(credit,aes(x=HISTORY,fill=RESPONSE)) +geom_bar(position = "dodge") 
+
+g_SAV_ACCT <- ggplot(credit,aes(x=SAV_ACCT,fill=RESPONSE)) +geom_bar(position = "dodge") 
+
+g_EMPLOYMENT <- ggplot(credit,aes(x=EMPLOYMENT,fill=RESPONSE)) +geom_bar(position = "dodge") 
+
+g_CO_APPLICANT <- ggplot(credit,aes(x=as.factor(`CO-APPLICANT`),fill=RESPONSE)) +geom_bar(position = "dodge") 
+
+g_GUARANTOR <- ggplot(credit,aes(x=as.factor(GUARANTOR),fill=RESPONSE)) +geom_bar(position = "dodge") 
+
+g_PRESENT_RESIDENT <- ggplot(credit,aes(x=PRESENT_RESIDENT,fill=RESPONSE)) +geom_bar(position = "dodge") 
+
+g_REAL_ESTATE <- ggplot(credit,aes(x=REAL_ESTATE,fill=RESPONSE)) +geom_bar(position = "dodge") 
+
+g_PROP_UNKN_NONE <- ggplot(credit,aes(x=PROP_UNKN_NONE,fill=RESPONSE)) +geom_bar(position = "dodge") 
+
+g_OTHER_INSTALL<- ggplot(credit,aes(x=as.factor(OTHER_INSTALL),fill=RESPONSE)) +geom_bar(position = "dodge")
+
+g_RENT <- ggplot(credit,aes(x=as.factor(RENT),fill=RESPONSE)) +geom_bar(position = "dodge")
+
+g_OWN_RES <- ggplot(credit,aes(x=as.factor(OWN_RES),fill=RESPONSE)) +geom_bar(position = "dodge")
+
+g_JOB <- ggplot(credit,aes(x=JOB,fill=RESPONSE)) +geom_bar(position = "dodge")
+
+g_INSTALL_RATE <- ggplot(credit,aes(x=as.factor(INSTALL_RATE),fill=RESPONSE)) +geom_bar(position = "dodge")                      
+
+g_NUM_CREDITS <- ggplot(credit,aes(x=as.factor(NUM_CREDITS),fill=RESPONSE)) +geom_bar(position = "dodge")                
+
+g_NUM_DEPENDENTS <- ggplot(credit,aes(x=as.factor(NUM_DEPENDENTS),fill=RESPONSE)) +geom_bar(position = "dodge") 
+```
+
+
+```{r}
+plot_grid(g_CHK_ACCT,g_HISTORY,g_SAV_ACCT)
+
+plot_grid(g_EMPLOYMENT,g_CO_APPLICANT,g_GUARANTOR)
+
+plot_grid(g_PRESENT_RESIDENT,g_REAL_ESTATE,g_PROP_UNKN_NONE)
+
+plot_grid(g_OTHER_INSTALL,g_RENT,g_OWN_RES)
+
+plot_grid(g_JOB,g_INSTALL_RATE,g_NUM_CREDITS,g_NUM_DEPENDENTS)
+```
+
+
+# Part2:
+
+# Read data
+
+```{r}
+D <- read.csv("GermanCredit.csv")
+D = D[, -1] # remove the column "OBS."
+n = nrow(D)
+```
+
+# Partition data
+
+```{r}
+index = sample(1:n, n*0.7)
+train = D[index, ]
+valid = D[-index, ]
+```
+
+# Normalization
+
+```{r}
+recipe = caret::preProcess(train, method = "range")
+train.norm = predict(recipe, train)
+valid.norm = predict(recipe, valid)
+
+actual = valid.norm$RESPONSE # to be used later
+
+```
+
+
+# Logistic model
+
+```{r}
+fit = glm(RESPONSE~., data = train.norm, family=binomial)
+
+pred.logistic.prob = predict(fit, newdata=valid.norm, type = "response") # Probability
+
+pred.logistic.lbl = as.integer(pred.logistic.prob>0.5)
+
+caret::confusionMatrix(factor(pred.logistic.lbl), factor(actual), positive = "1")
+
+```
+
+# Lift chart incorporating cost/gain 
+```{r}
+profit1 = ifelse(actual == 1, 100*pred.logistic.prob, -500*pred.logistic.prob)
+
+g1 = gains::gains(profit1, pred.logistic.prob) 
+p = mean(actual)
+profit2 = ifelse(actual == 1, 100*p, -500*p)
+
+g2 = gains::gains(profit2, rep(p, length(actual)))
+
+lift = g1$mean.resp/g2$mean.resp
+file = 1:10
+barplot(lift~file)
+```
+
+
+# Classification tree model:
+
+```{r}
+library(rpart)
+library(caret)
+library(rpart.plot)
+fit = rpart(RESPONSE ~ ., data = train.norm, maxdepth = 5)
+
+rpart.plot(fit)
+pred.tree = predict(fit, newdata = valid.norm)
+
+mse = mean((pred.tree - actual)^2)
+
+rmse = sqrt(mse)
+cat("RMSE:", rmse, "\n")
+pred.tree.lbl = as.integer(pred.tree > 0.5)
+
+```
+
+```{r}
+confusionMatrix(factor(pred.tree.lbl), factor(actual), positive = "1")
+
+profit1 = ifelse(actual == 1, 100 * pred.tree, -500 * pred.tree)
+
+g1 = gains::gains(profit1, pred.tree)
+p = mean(actual)
+profit2 = ifelse(actual == 1, 100 * p, -500 * p)
+
+g2 = gains::gains(profit2, rep(p, length(actual)))
+
+lift = g1$mean.resp / g2$mean.resp
+barplot(lift)
+
+```
+
+
+
+```{r}
+library(neuralnet)
+library(caret)
+
+fit <- neuralnet(RESPONSE ~ ., data = train.norm, hidden = 5, linear.output = FALSE)
+pred.nn <- compute(fit, valid.norm[, -1])$net.result
+
+mse <- mean((pred.nn - actual)^2)
+rmse <- sqrt(mse)
+
+cat("RMSE:", rmse, "\n")
+
+pred.nn.lbl <- as.integer(pred.nn > 0.5)
+
+confusionMatrix(factor(pred.nn.lbl), factor(actual), positive = "1")
+```
+
+```{r}
+profit1 <- ifelse(actual == 1, 100 * pred.nn, -500 * pred.nn)
+
+g1 <- gains::gains(profit1, pred.nn)
+p <- mean(actual)
+profit2 <- ifelse(actual == 1, 100 * p, -500 * p)
+
+g2 <- gains::gains(profit2, rep(p, length(actual)))
+
+lift <- g1$mean.resp / g2$mean.resp
+barplot(lift)
+
+```
+
+
+
+Function to be used later:
+```{r}
+create_profit_table <- function(actual, predicted, p, fp_cost, tp_gain) {
+  require(dplyr)
+  df <- data.frame(actual = actual, predicted = predicted)
+  df <- df %>% arrange(-predicted)
+  n <- nrow(df)
+  df$profit <- ifelse(df$actual == 1, tp_gain, -fp_cost)
+  df$profit_cum <- cumsum(df$profit)
+  df$threshold <- rep(0, n)
+  for (i in 1:n) {
+    threshold <- df$predicted[i]
+    df$threshold[i] <- threshold
+    if (i/n >= p) {
+      break
+    }
+  }
+  
+  df_summary <- df %>% group_by(threshold) %>% summarize(num_obs = n(), 
+                                                          num_pos = sum(actual), 
+                                                          profit_cum = sum(profit_cum))
+  return(df_summary)
+}
+
+```
+
+
+```{r}
+profit.table <- create_profit_table(actual = actual, predicted = pred.logistic.prob, p = 0.3, fp_cost = 500, tp_gain = 100)
+prob.cutoff <- profit.table$threshold[which.max(profit.table$profit_cum)]
+
+cat("Probability cutoff:", prob.cutoff, "\n")
+```
+
+
